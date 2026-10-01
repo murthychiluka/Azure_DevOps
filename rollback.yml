@@ -1,0 +1,56 @@
+trigger: none
+
+parameters:
+- name: buildId
+  displayName: 'Successful Build ID to Roll Back To'
+  type: string
+  default: '38'
+
+variables:
+- group: myapp-config
+
+stages:
+
+# =========================
+# Rollback Production
+# =========================
+- stage: Rollback
+  displayName: 'Rollback Production'
+
+  jobs:
+  - deployment: RollbackProduction
+    displayName: 'Rollback to Previous Version'
+
+    environment: production
+
+    pool:
+      vmImage: ubuntu-latest
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          # Download artifact from selected previous build
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Previous Successful Artifact'
+            inputs:
+              buildType: 'specific'
+              project: 'myapp'
+              definition: '2'
+              buildVersionToDownload: 'specific'
+              pipelineId: '${{ parameters.buildId }}'
+              artifactName: 'python-app'
+              targetPath: '$(Pipeline.Workspace)/python-app'
+
+          # Deploy old artifact
+          - task: AzureWebApp@1
+            displayName: 'Deploy Previous Version'
+            inputs:
+              azureSubscription: 'azure-rg-connection'
+              appType: 'webAppLinux'
+              appName: '$(appServiceName)'
+              package: '$(Pipeline.Workspace)/python-app/python-app.zip'
+              runtimeStack: 'PYTHON|$(pythonVersion)'
+              startUpCommand: 'gunicorn --bind=0.0.0.0 --timeout 600 app:app'
+              appSettings: '-SCM_DO_BUILD_DURING_DEPLOYMENT true'

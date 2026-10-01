@@ -1,0 +1,195 @@
+trigger:
+- main
+
+variables:
+- group: myapp-config
+
+# variables:
+#   pythonVersion: '3.12'
+#   appServiceName: 'murthy-python-app-2026'
+
+stages:
+
+# =========================
+# CI - Build and Test
+# =========================
+- stage: Build
+  displayName: 'Build and Test'
+
+  jobs:
+  - job: Build
+    displayName: 'Build Python Application'
+
+    pool:
+      vmImage: ubuntu-latest
+
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+      displayName: 'Use Python $(pythonVersion)'
+
+    - script: |
+        echo "Environment: $(environmentName)"
+        echo "Python version: $(pythonVersion)"
+        echo "App Service: $(appServiceName)"
+      displayName: 'Show pipeline configuration'
+
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+      workingDirectory: '$(Build.SourcesDirectory)'
+      displayName: 'Install dependencies'
+
+    # - script: |
+    #     python -m pytest
+    #   workingDirectory: '$(Build.SourcesDirectory)'
+    #   displayName: 'Run tests'
+    - script: |
+        echo "= ==== CURRENT DIRECTORY ====="
+        pwd
+
+        echo "===== BUILD SOURCES DIRECTORY ====="
+        echo "$(Build.SourcesDirectory)"
+
+        echo "===== DIRECTORY CONTENTS ====="
+        ls -la
+
+        echo "===== ALL test_app.py FILES ====="
+        find "$(Build.SourcesDirectory)" -name "test_app.py" -print
+
+        echo "===== ALL PYTHON FILES ====="
+        find "$(Build.SourcesDirectory)" -maxdepth 3 -type f -name "*.py" -print
+      workingDirectory: '$(Build.SourcesDirectory)'
+      displayName: 'Debug repository structure'
+
+    - script: |
+        python -m pytest
+      workingDirectory: '$(Build.SourcesDirectory)'
+      displayName: 'Run tests'
+    - script: |
+        zip python-app.zip app.py requirements.txt
+      workingDirectory: '$(Build.SourcesDirectory)'
+      displayName: 'Create deployment package'
+
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/python-app.zip'
+        artifact: 'python-app'
+      displayName: 'Publish deployment artifact'
+
+
+# =========================
+# CD - Deploy to Azure
+# =========================
+
+- stage: Deploy_Dev
+  displayName: 'Deploy to Dev'
+
+  dependsOn: Build
+  condition: succeeded()
+
+  jobs:
+
+  - template: templates/deploy.yml
+    parameters:
+      environment: dev
+      displayName: 'Deploy to Dev'
+
+- stage: Smoke_Test
+  displayName: 'Smoke Test Dev'
+
+  dependsOn: Deploy_Dev
+  condition: succeeded()
+
+  jobs:
+  - job: SmokeTest
+    displayName: 'Test Dev Application'
+
+    pool:
+      vmImage: ubuntu-latest
+
+    steps:
+    - script: |
+        echo "Testing application health..."
+
+        response=$(curl -s -o /tmp/health.json -w "%{http_code}" "$(appUrl)/health")
+
+        echo "HTTP Status: $response"
+        cat /tmp/health.json
+
+        if [ "$response" != "200" ]; then
+          echo "Smoke test FAILED"
+          exit 1
+        fi
+
+        echo "Smoke test PASSED"
+      displayName: 'Health Check'
+
+# =========================
+# Deploy to QA
+# =========================
+- stage: Deploy_QA
+  displayName: 'Deploy to QA'
+
+  dependsOn: Smoke_Test
+  condition: succeeded()
+
+  jobs:
+
+  - template: templates/deploy.yml
+    parameters:
+      environment: qa
+      displayName: 'Deploy to QA'
+
+# =========================
+# Smoke Test QA
+# =========================
+- stage: Smoke_Test_QA
+  displayName: 'Smoke Test QA'
+
+  dependsOn: Deploy_QA
+  condition: succeeded()
+
+  jobs:
+  - job: SmokeTestQA
+    displayName: 'Test QA Application'
+
+    pool:
+      vmImage: ubuntu-latest
+
+    steps:
+    - script: |
+        echo "Testing QA application health..."
+
+        response=$(curl -s -o /tmp/health.json -w "%{http_code}" "$(appUrl)/health")
+
+        echo "HTTP Status: $response"
+        echo "Response:"
+        cat /tmp/health.json
+
+        if [ "$response" != "200" ]; then
+          echo "QA smoke test FAILED"
+          exit 1
+        fi
+
+        echo "QA smoke test PASSED"
+      displayName: 'QA Health Check'
+
+# =========================
+# Deploy to Production
+# =========================
+- stage: Deploy_Production
+  displayName: 'Deploy to Production'
+
+  dependsOn: Smoke_Test_QA
+  condition: succeeded()
+
+  jobs:
+
+  - template: templates/deploy.yml
+    parameters:
+      environment: production
+      displayName: 'Deploy to Production'

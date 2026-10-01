@@ -1,0 +1,38 @@
+parameters:
+- name: environment
+  type: string
+
+- name: displayName
+  type: string
+
+jobs:
+
+- deployment: Deploy
+  displayName: 'Deploy to ${{ parameters.environment }}'
+
+  environment: ${{ parameters.environment }}
+
+  pool:
+    vmImage: ubuntu-latest
+
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+
+        - task: DownloadPipelineArtifact@2
+          displayName: 'Download deployment artifact'
+          inputs:
+            artifact: 'python-app'
+            path: '$(Pipeline.Workspace)/python-app'
+
+        - task: AzureWebApp@1
+          displayName: '${{ parameters.displayName }}'
+          inputs:
+            azureSubscription: 'azure-rg-connection'
+            appType: 'webAppLinux'
+            appName: '$(appServiceName)'
+            package: '$(Pipeline.Workspace)/python-app/python-app.zip'
+            runtimeStack: 'PYTHON|$(pythonVersion)'
+            startUpCommand: 'gunicorn --bind=0.0.0.0 --timeout 600 app:app'
+            appSettings: '-SCM_DO_BUILD_DURING_DEPLOYMENT true'
